@@ -1,0 +1,7 @@
+[package]
+name = "terprime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+machine-prime = "1.2.2"

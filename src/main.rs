@@ -7,6 +7,7 @@ use std::io::Write;
  const INTERVAL : &str = "interval";
  const NTH : &str = "nth";
  const WRITE : &str = "write";
+ const BINARY : &str = "binary";
  const HP : &str = "-h";
  const AB : &str = "-a";
  const INT_ERROR : &str = "Valid inputs are Natural numbers from 0 to 18,446,744,073,709,551,615";
@@ -16,7 +17,7 @@ use std::io::Write;
    way to enumerate primes by sieving (and in general),terprime strives
    to be the fastest by primality testing. Terprime is generally slower 
    than primesieve however due to minimal precomputation it is faster 
-   for checking (small) intervals of larger integers around 2^64.
+   for checking (small) intervals of larger integers around 2^64. 
     
    Terprime uses the Machine-Prime library (https://github.com/JASory/machine-prime), 
    and primarily exists to showcase the advantages and drawbacks of individual 
@@ -33,13 +34,15 @@ use std::io::Write;
  
  Options: 
  
-    check      Checks an integer for primality, returning a boolean TRUE or FALSE
+    check      Checks an integer for primality, returning Prime or Composite
     count      Counts the number of primes between START and STOP
     interval   Lists the primes from START to STOP, inclusive
     list       Lists the primes from the START-th to the STOP-th, inclusive
     nth        Lists the STOP-th prime
     write      Writes list of primes from START to STOP, writes to \"primes\" file
-               in local directory. Much faster than piping stdout to file  
+               in local directory. Much faster than piping stdout to file
+    binary     Writes list of primes from START to STOP in little-endian binary format, 
+               writes to \"primes.bin\" in local directory. Faster than utf8 writing           
     -h         This help page 
     -a         About terprime 
  ";
@@ -110,6 +113,9 @@ fn fix_bound(x: u64) -> u64{
   x+1  
 }
 
+/*
+    
+*/
 
 fn pi(inf: u64, sup: u64) -> u64{
        let mut count = 0u64;
@@ -121,6 +127,9 @@ fn pi(inf: u64, sup: u64) -> u64{
        return count;
      }
 
+/*
+      
+*/
 
 
 fn parallel_pi(inf: u64, sup: u64, tc: u64) -> u64{
@@ -274,22 +283,33 @@ fn main() {
            }
            else{
              match env_var[2].parse::<u64>(){
-               Ok(x) => println!("{}",is_prime(x)),
+               Ok(x) => {
+                    if is_prime(x){
+                       println!("Prime");
+                    }
+                    else{
+                      println!("Composite");
+                    }
+                     }
                Err(_) => println!("{}",INT_ERROR),
              } // end inner match
            } // end inner else
         } //
     COUNT => {
-      flag = true;
+    
        match xtrct_args(env_var){
-        Some((inf,sup,tc)) => println!("{}",parallel_pi(inf,sup,tc)),
+        Some((inf,sup,tc)) => {
+               flag = true; 
+        println!("{}",parallel_pi(inf,sup,tc));
+        },
         None => println!("{}",INT_ERROR), 
        }     
      }
     INTERVAL => {
-      flag = true;
+      
       match xtrct_args(env_var){
         Some((inf,initial_sup,tc)) => {
+            flag = true; 
          let sup = fix_bound(initial_sup);
            let primelist = parallel_plist(inf,sup,tc);
            for i in primelist.iter(){
@@ -300,10 +320,10 @@ fn main() {
       }   
     }
     WRITE => {
-      flag = true;    
+         
      match xtrct_args(env_var){
         Some((inf,initial_sup,tc)) => {
-
+              flag = true; 
            let sup = fix_bound(initial_sup);
            let mut file = std::io::BufWriter::new(std::fs::File::create("primes").unwrap());
            
@@ -330,11 +350,42 @@ fn main() {
       }   
       
     }
+    
+    BINARY => {
+
+     match xtrct_args(env_var){
+        Some((inf,initial_sup,tc)) => {
+              flag = true; 
+           let sup = fix_bound(initial_sup);
+           let mut file = std::io::BufWriter::new(std::fs::File::create("primes.bin").unwrap());
+           
+           let stride : u64 = 100_000_000*tc;
+          
+           let steps = (sup-inf)/stride;
+           for i in 0..(steps){
+              let inner_inf = inf+(stride*i);
+              let inner_sup = inf+(stride*(i+1));
+              let primelist = parallel_plist(inner_inf,inner_sup,tc);
+               
+               for i in primelist.iter(){
+                 file.write(&i.to_le_bytes()).unwrap();
+               }
+           }
+           let primelist = parallel_plist(inf+(stride*steps),sup,tc);
+           for i in primelist.iter(){
+                 file.write(&i.to_le_bytes()).unwrap();
+               }
+        },
+        None => println!("{}",INT_ERROR), 
+      }   
+      
+    }
+    
     LIST => {
-       flag = true; 
+
        match xtrct_args(env_var){ // inner match 
         Some((inf,sup,tc)) => { // match branch
-
+            flag = true; 
            let p = primes_interval(inf,sup,tc);
            for i in p{
               println!("{}",i)
@@ -344,9 +395,9 @@ fn main() {
     }
     },
     NTH => {
-     flag = true;
       match xtrct_args(env_var){
        Some((_,sup,tc)) =>{
+        flag = true;
         let p = primes_interval(sup,sup,tc);
         for i in p{
           println!("{}",i)
@@ -357,7 +408,7 @@ fn main() {
     }
     HP  => println!("{}",HELP),  
     AB  => println!("{}",ABOUT),
-    _=> println!("Select either check,count,list or write as the first argument"),
+    _=> println!("Select one of the following {{check, count, nth, list, interval, write, binary}} as the first argument"),
     } 
    if flag{
       println!("\nExecuted in {:?}",start.elapsed())

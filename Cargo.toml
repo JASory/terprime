@@ -1,7 +1,20 @@
 [package]
-name = "terprime"
+name = "primebench"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-machine-prime = "1.2.2"
+machine-prime = { version = "1.5.2",default-features=false,features=["table","wide","internal"]}
+primal = "0.3.3"
+primality-test = "0.3.0"
+red_primality = "0.2.0"
+is-prime-for-primitive-int ="0.5.1"
+prim = "0.1.5"
+rand = "0.8.5"
+num-prime = "0.4.3"
+c-prime= "0.1.2"#{path="/home/jasory/c-prime"}
+number-theory= {path="/home/jasory/Projects/nxtgen"}
+#f-analysis = {path ="/home/jasory/Projects/f-analysis"}
+#ssmr = {path = "/home/jasory/Projects/ssmr"}

@@ -1,242 +1,87 @@
-use machine_prime::is_prime;
+mod prime_math;
+mod factor;
+mod ntheory;
+mod mapping;
+
+#[cfg(feature="gui")]
+mod gui;
+
+#[cfg(feature="gui")]
+use gui::build_ui;
+#[cfg(feature="gui")]
+use gtk4::{
+    glib::{self, clone},
+    prelude::*,
+};
+
+use machine_prime::is_prime_128;
+use prime_math::*;
+use crate::factor::full_factor;
+use crate::ntheory::{gcd,euler_totient};
+use crate::mapping::*;
+
 use std::io::Write;
  
  const CHECK : &str = "check";
  const COUNT : &str = "count";
+ const EULER : &str = "euler";
+ const FACTOR : &str ="factor";
  const LIST : &str = "list";
+ const GCD : &str ="gcd";
  const INTERVAL : &str = "interval";
  const NTH : &str = "nth";
+ const NEXT : &str ="next";
+ const PREV : &str ="prev";
  const WRITE : &str = "write";
  const BINARY : &str = "binary";
  const HP : &str = "-h";
  const AB : &str = "-a";
- const INT_ERROR : &str = "Valid inputs are Natural numbers from 0 to 18,446,744,073,709,551,615";
+ const INT_ERROR : &str = "Valid inputs are Natural numbers from 0 to 340,282,366,920,938,463,463,374,607,431,768,211,456";
  const ABOUT : &str = "
    Terprime is an alternate approach to primecounting and listing to 
    Kim Walisch's primesieve.While primesieve aims to be the fastest 
    way to enumerate primes by sieving (and in general),terprime strives
    to be the fastest by primality testing. Terprime is generally slower 
    than primesieve however due to minimal precomputation it is faster 
-   for checking (small) intervals of larger integers around 2^64. 
+   for checking (small) intervals of larger integers around 2^128. 
     
    Terprime uses the Machine-Prime library (https://github.com/JASory/machine-prime), 
    and primarily exists to showcase the advantages and drawbacks of individual 
    primality testing vs sieving.  
    
-   Terprime 1.1 
+   Terprime 1.2 
    Copyright (C) JASORY
    AGPL 3.0    
  ";
  
  const HELP : &str = "
- Usage: terprime OPTION [START] STOP
- Check, count and list primes less than 2^64
+ Usage: terprime FUNCTION [X] Y
+ If one argument is provided then X is set to zero, and the interval 0;Y is analysed
  
- Options: 
+ Primality: 
  
     check      Checks an integer for primality, returning Prime or Composite
-    count      Counts the number of primes between START and STOP
-    interval   Lists the primes from START to STOP, inclusive
-    list       Lists the primes from the START-th to the STOP-th, inclusive
-    nth        Lists the STOP-th prime
-    write      Writes list of primes from START to STOP, writes to \"primes\" file
+    count      Counts the number of primes between X and Y
+    interval   Lists the primes from X to Y, inclusive
+    list       Lists the primes from the X-th to the Y-th, inclusive
+    nth        Lists the X-th prime
+    next       Lists the next prime greater than X
+    prev       Lists the next prime less than X
+    write      Writes list of primes from X to Y, writes to \"primes\" file
                in local directory. Much faster than piping stdout to file
-    binary     Writes list of primes from START to STOP in little-endian binary format, 
-               writes to \"primes.bin\" in local directory. Faster than utf8 writing           
+    binary     Writes list of primes from X to Y in little-endian binary format, 
+               writes to \"primes.bin\" in local directory. Faster than utf8 writing   
+               
+  Number Theory:
+  
+    factor     Factors X into primes
+    gcd        Greatest common divisor of X,Y
+    euler      Euler phi of X
+    
+    
     -h         This help page 
     -a         About terprime 
  ";
-
- fn thread_count() -> usize{
-  match std::thread::available_parallelism(){
-   Ok(x) => usize::from(x),
-   Err(_) => 1usize,
-  }
-}
-
-fn d_string(x: u64) -> String{
-  x.to_string()+"\n"
-}
-
-/*
-   Christian Axler's approximation of nth prime
-*/
-
-fn nth_core(x: u64, param: f64) -> u64{
-    let float_x = x as f64;
-    let log = float_x.ln();
-    let double_log = log.ln();
-    
-    let last_term = (double_log.powi(2)-6f64*double_log + param)/(2f64*log.powi(2));
-
-    (float_x*(log + double_log - 1f64 + (double_log - 2f64)/log - last_term)) as u64
-    
-}
-
-fn nth_est_upper(x: u64) -> u64{
-   if x < 3{
-     return 6
-  }
-   if x > 46254380{
-     return nth_core(x,10.667)
-   }
-   if x > 3467{
-    return nth_core(x,0.0)
-   }
-  return (((x as f64)*(x as f64).ln()) as u64)<<2
-}
-
-fn nth_est_lower(x: u64) -> u64{
-   nth_core(x,11.321)
-}
-
-/*
-  In: Two 64-bit unsigned integers
-  Out: Two 64-bit unsigned integers in the order of lo,hi where lo <= hi
-*/
-
-fn fix_sequence(pos_inf:u64, pos_sup: u64) -> (u64,u64){
-   (std::cmp::min(pos_inf,pos_sup),std::cmp::max(pos_inf,pos_sup))
-}
-
-/*
-  Description: Function converts to exclusive range limited to the last 64-bit prime
-   In: 64-bit integer, x
-  Out: x+1, x < 2^64-58
-*/
-
-
-fn fix_bound(x: u64) -> u64{
-   if x > (u64::MAX-57){
-      return u64::MAX-57
-   }
-  x+1  
-}
-
-/*
-    
-*/
-
-fn pi(inf: u64, sup: u64) -> u64{
-       let mut count = 0u64;
-        for i in inf..sup{
-          if is_prime(i){
-            count+=1;
-          }
-        }
-       return count;
-     }
-
-/*
-      
-*/
-
-
-fn parallel_pi(inf: u64, sup: u64, tc: u64) -> u64{
-   
- let (start, stop) = fix_sequence(inf,sup);
- let stride = (stop-start)/tc;
- let mut threads : Vec<std::thread::JoinHandle::<u64>> = Vec::new();
-
- for i in 0..(tc-1){
-    let thread_start = start+i*stride;
-    let thread_stop = start+stride*(i+1);
-    threads.push( 
-      std::thread::spawn( move || { 
-        pi(thread_start,thread_stop)
-} ));
-  } // end for loop
-
-   // Last interval to account for any integer division flooring
-  threads.push(
-    std::thread::spawn( move || { 
-     pi(start+(tc-1)*stride,stop+1)
-}));
-  
-  let mut total = 0u64;
-  
-  for handle in threads{
-     total+=handle.join().unwrap();
-  }
-  total
-    
-}
-
-
-
- fn plist(inf: u64, sup: u64) -> Vec<u64>{
-       let mut veccy = vec![];
-        for i in inf..sup{
-          if is_prime(i){
-            veccy.push(i);
-          }
-        }
-       return veccy
- }
-
-
-fn parallel_plist(inf: u64, sup: u64, tc: u64) -> Vec<u64>{
-   
- let (start, stop) = fix_sequence(inf,sup);
- let stride = (stop-start)/tc;
- let mut threads : Vec<std::thread::JoinHandle::<Vec<u64>>> = Vec::new();
-
- for i in 0..(tc-1){
-    let thread_start = start+i*stride;
-    let thread_stop = start+stride*(i+1);
-    threads.push( 
-      std::thread::spawn( move || { 
-        plist(thread_start,thread_stop)
-} ));
-  } // end for loop
-
-   // Last interval to account for any integer division flooring
-  threads.push(
-    std::thread::spawn( move || { 
-     plist(start+(tc-1)*stride,stop)
-}));
-  
-  let mut total = vec![];
-  
-  for handle in threads{
-     total.extend_from_slice(&handle.join().unwrap()[..]);
-  }
-  total
-    
-}
-
-
-
-fn primes_interval(inf:u64,sup: u64,tc: u64) -> Vec<u64>{
-
-         if inf == 0{  // if branch
-
-          let bound = nth_est_upper(sup);
-          
-          let primelist = parallel_plist(inf,bound,tc);
-
-           return primelist[..(sup as usize)].iter().cloned().collect::<Vec<u64>>() 
-         }  // end if
-           else {
-
-           let mut low_est =  nth_est_lower(inf);
-           let mut low_pi = parallel_pi(0u64,low_est,tc);
-      
-           while low_pi < inf{
-              low_est+=1;
-              if is_prime(low_est){
-                 low_pi+=1;
-              } // end if
-           } // end while
-      
-           let high_est = nth_est_upper(sup);
-           let plist = parallel_plist(low_est,high_est,tc);
-           let interval = (sup-inf) as usize+1;
-
-           return plist[..interval].iter().cloned().collect::<Vec<u64>>() 
-          } // end branching
-
-}
 
 
 
@@ -244,17 +89,17 @@ fn primes_interval(inf:u64,sup: u64,tc: u64) -> Vec<u64>{
    In: Vector of Strings
    Out: START,STOP,THREADS
 */ 
-fn xtrct_args(args: Vec<String>) -> Option<(u64,u64,u64)>{
+fn xtrct_args(args: Vec<String>) -> Option<(u128,u128,u128)>{
    match args.len(){
     3 => {
-      match args[2].parse::<u64>(){       
-       Ok(x) => {return Some((0,x,thread_count() as u64))} ,
+      match args[2].parse::<u128>(){       
+       Ok(x) => {return Some((0,x,thread_count() as u128))} ,
        Err(_) => None,
       }
     },
     4 => {
-      match (args[2].parse::<u64>(),args[3].parse::<u64>()){
-      (Ok(x),Ok(y)) => {let (inf,sup) = fix_sequence(x,y); return Some((inf,sup,thread_count() as u64))}
+      match (args[2].parse::<u128>(),args[3].parse::<u128>()){
+      (Ok(x),Ok(y)) => {let (inf,sup) = fix_sequence(x,y); return Some((inf,sup,thread_count() as u128))}
       _=> None,
       }
     },
@@ -262,19 +107,135 @@ fn xtrct_args(args: Vec<String>) -> Option<(u64,u64,u64)>{
   }
 }
 
+// 
+fn terminal(flag: bool) -> bool{
 
+      let env_var = std::env::args().collect::<Vec<String>>();
+       
+       if env_var.len() < 2{
+          if flag{
+             println!("{}",HELP);
+          }
+        //  println!("{}",HELP);
+          return false;
+       }
+       
+       let op = env_var[1].as_str();
+       
+       let op_enum = map_string(op);
+      
+       if op_enum == Op::Invalid{
+          println!("{}",HELP);
+          return true;
+       }
+       else{
+          match xtrct_args(env_var){
+             Some(args) => {
+             
+              let res = calc_table(op_enum,args.0,args.1,args.2,None);
+              
+            println!("{}",res.display(false));
+            return true;
+          }
+          None => { println!("{}",INT_ERROR); return true;},
+         }
+       }
+}
+/*
+fn terminal(flag: bool){
+       if flag{
+       let env_var = std::env::args().collect::<Vec<String>>();
+       
+       if env_var.len() < 2{
+          println!("{}",HELP);
+       }
+       
+       let op = env_var[1].as_str();
+       
+       let op_enum = map_string(op);
+      
+       if op_enum == Op::Invalid{
+          println!("{}",HELP);
+       }
+       else{
+       match xtrct_args(env_var){
+          Some(args) => {
+             
+       let res = calc_table(op_enum,args.0,args.1,args.2,None);
+              
+       println!("{}",res.display(false));
+          }
+          None => println!("{}",INT_ERROR),
+       }
+       
+       }
+      }
+      else{
+        
+        let env_var = std::env::args().collect::<Vec<String>>();
+       
+       if env_var.len() < 2{
+          ()//println!("{}",HELP);
+       }
+       else{
+        let op = env_var[1].as_str();
+       
+       let op_enum = map_string(op);
+      
+       if op_enum == Op::Invalid{
+          println!("{}",HELP);
+       }
+       else{
+       match xtrct_args(env_var){
+          Some(args) => {
+             
+       let res = calc_table(op_enum,args.0,args.1,args.2,None);
+              
+       println!("{}",res.display(false));
+          }
+          None => println!("{}",INT_ERROR),
+       } 
+       }
+      }
+}
+}
+*/
 
-fn main() { 
+fn main() {
+    #[cfg(not(feature="gui"))]
+    const ERRORFLAG : bool = true;
+    
+     #[cfg(feature="gui")]
+    const ERRORFLAG : bool = false;
+    
+    let execflag = terminal(ERRORFLAG);
+    
+    //let env_var = std::env::args().collect::<Vec<String>>();
+    
+    if !execflag{
+      
+    #[cfg(feature="gui")]
+    {
+        let application = gtk4::Application::builder()
+        .application_id("com.github.jasory.terprime")
+        .build();
+
+    application.connect_activate(build_ui);
+    application.run();
+    }
+    
+    }//println!("Bang!");  
+/* 
     let env_var = std::env::args().collect::<Vec<String>>();
 
-    let mut flag = false;
+   // let mut flag = false;
 
     if env_var.len() < 2{
      println!("{}",HELP);
     }
     else{
      // Start timer
-    let start = std::time::Instant::now();
+ //   let start = std::time::Instant::now();
 
       match env_var[1].as_str(){
        CHECK => {
@@ -282,9 +243,9 @@ fn main() {
              println!("{}",INT_ERROR);
            }
            else{
-             match env_var[2].parse::<u64>(){
+             match env_var[2].parse::<u128>(){
                Ok(x) => {
-                    if is_prime(x){
+                    if is_prime_128(x){
                        println!("Prime");
                     }
                     else{
@@ -299,7 +260,7 @@ fn main() {
     
        match xtrct_args(env_var){
         Some((inf,sup,tc)) => {
-               flag = true; 
+   //            flag = true; 
         println!("{}",parallel_pi(inf,sup,tc));
         },
         None => println!("{}",INT_ERROR), 
@@ -309,7 +270,7 @@ fn main() {
       
       match xtrct_args(env_var){
         Some((inf,initial_sup,tc)) => {
-            flag = true; 
+       //     flag = true; 
          let sup = fix_bound(initial_sup);
            let primelist = parallel_plist(inf,sup,tc);
            for i in primelist.iter(){
@@ -323,11 +284,11 @@ fn main() {
          
      match xtrct_args(env_var){
         Some((inf,initial_sup,tc)) => {
-              flag = true; 
+         //     flag = true; 
            let sup = fix_bound(initial_sup);
            let mut file = std::io::BufWriter::new(std::fs::File::create("primes").unwrap());
            
-           let stride : u64 = 100_000_000*tc;
+           let stride : u128 = 100_000_000*tc;
           
            let steps = (sup-inf)/stride;
            for i in 0..(steps){
@@ -355,11 +316,11 @@ fn main() {
 
      match xtrct_args(env_var){
         Some((inf,initial_sup,tc)) => {
-              flag = true; 
+           //   flag = true; 
            let sup = fix_bound(initial_sup);
            let mut file = std::io::BufWriter::new(std::fs::File::create("primes.bin").unwrap());
            
-           let stride : u64 = 100_000_000*tc;
+           let stride : u128 = 100_000_000*tc;
           
            let steps = (sup-inf)/stride;
            for i in 0..(steps){
@@ -385,7 +346,7 @@ fn main() {
 
        match xtrct_args(env_var){ // inner match 
         Some((inf,sup,tc)) => { // match branch
-            flag = true; 
+          //  flag = true; 
            let p = primes_interval(inf,sup,tc);
            for i in p{
               println!("{}",i)
@@ -397,7 +358,7 @@ fn main() {
     NTH => {
       match xtrct_args(env_var){
        Some((_,sup,tc)) =>{
-        flag = true;
+      //  flag = true;
         let p = primes_interval(sup,sup,tc);
         for i in p{
           println!("{}",i)
@@ -405,14 +366,72 @@ fn main() {
        }
        None => println!("{}",INT_ERROR),
       }
-    }
+    },
+    NEXT => {
+      match xtrct_args(env_var){
+       Some((_,sup,_)) =>{
+        let k = bounded_prime(sup,1);
+        match k{
+          Some(x) => println!("{}",x),
+          None => println!("Terprime does not support values beyond 2^128"),
+        }
+       }
+       None => println!("{}",INT_ERROR),
+      }
+    },
+    PREV => {
+      match xtrct_args(env_var){
+       Some((_,sup,_)) =>{
+        let k = bounded_prime(sup,u128::MAX);
+        match k{
+          Some(x) => println!("{}",x),
+          None => println!("No prime exists below 2"),
+        }
+       }
+       None => println!("{}",INT_ERROR),
+      }
+    },
+    FACTOR => {
+       match xtrct_args(env_var){
+       Some((_,sup,_)) =>{
+           if sup==0{
+              println!("Infinite number of factors");
+           }
+           if sup == 1{
+              println!("1");
+           }
+           else{
+          println!("{}",full_factor(sup).display());
+          }
+       }
+       None => println!("{}",INT_ERROR),
+      }
+    },
+    
+    GCD => {
+       match xtrct_args(env_var){
+        Some((inf,sup,_)) =>{
+         println!("{}",gcd(inf,sup));
+       }
+       None => println!("{}",INT_ERROR),
+       }
+     },
+     EULER => {
+    
+       match xtrct_args(env_var){
+        Some((_,sup,_)) => {
+        println!("{}",euler_totient(sup));
+        },
+        None => println!("{}",INT_ERROR), 
+       }     
+     },
     HP  => println!("{}",HELP),  
     AB  => println!("{}",ABOUT),
-    _=> println!("Select one of the following {{check, count, nth, list, interval, write, binary}} as the first argument"),
+    _=> println!("Select one of the following {{check, count, factor,nth, next, prev, list, interval, write, binary}} as the first argument"),
     } 
-   if flag{
-      println!("\nExecuted in {:?}",start.elapsed())
-   }
+ //  if flag{
+ //     println!("\nExecuted in {:?}",start.elapsed())
+ //  }
 }
-
+*/
 }
